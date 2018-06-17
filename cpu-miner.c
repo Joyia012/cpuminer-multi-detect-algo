@@ -217,6 +217,8 @@ bool opt_stratum_stats = false;
 bool allow_mininginfo = true;
 bool use_syslog = false;
 bool use_colors = true;
+bool detect_algo = false;
+int detect_algo_count = 0;
 static bool opt_background = false;
 bool opt_quiet = false;
 int opt_maxlograte = 5;
@@ -404,6 +406,7 @@ Options:\n\
       --max-temp=N      Only mine if cpu temp is less than specified value (linux)\n\
       --max-rate=N[KMG] Only mine if net hashrate is less than specified value\n\
       --max-diff=N      Only mine if net difficulty is less than specified value\n\
+      --detect-algo     Algo detecting  \n\
   -c, --config=FILE     load a JSON-format configuration file\n\
   -V, --version         display version information and exit\n\
   -h, --help            display this help text and exit\n\
@@ -456,6 +459,7 @@ static struct option const options[] = {
 	{ "scantime", 1, NULL, 's' },
 	{ "show-diff", 0, NULL, 1013 },
 	{ "hide-diff", 0, NULL, 1014 },
+	{ "detect-algo", 0, NULL, 1042 },
 	{ "max-log-rate", 1, NULL, 1019 },
 #ifdef HAVE_SYSLOG_H
 	{ "syslog", 0, NULL, 'S' },
@@ -1029,6 +1033,15 @@ static int share_result(int result, struct work *work, const char *reason)
 	double sharediff = work ? work->sharediff : stratum.sharediff;
 	int i;
 
+	if (result){
+	 if (detect_algo) {
+     applog(LOG_INFO, "Algorythm detected!!! \n  ALGO: %s", algo_names[opt_algo]);
+	   exit(0);
+	 }
+	}	else {
+	  detect_algo_count++;
+	}
+
 	hashrate = 0.;
 	pthread_mutex_lock(&stats_lock);
 	for (i = 0; i < opt_n_threads; i++)
@@ -1042,7 +1055,7 @@ static int share_result(int result, struct work *work, const char *reason)
 		flag = use_colors ?
 			(result ? CL_GRN YES : CL_RED BOO)
 		:	(result ? "(" YES ")" : "(" BOO ")");
-	} else {
+	} else {	
 		solved_count++;
 		flag = use_colors ?
 			(result ? CL_GRN YAY : CL_RED BOO)
@@ -3208,6 +3221,11 @@ void parse_arg(int key, char *arg)
 			ul = -1;
 		opt_affinity = ul;
 		break;
+		
+	case 1042: // detect-algo
+			detect_algo = true;
+		break;
+		
 	case 1021:
 		v = atoi(arg);
 		if (v < 0 || v > 5)	/* sanity check */
@@ -3462,6 +3480,9 @@ int main(int argc, char *argv[]) {
 		signal(SIGHUP, signal_handler);
 		signal(SIGTERM, signal_handler);
 	}
+	
+	
+	
 	/* Always catch Ctrl+C */
 	signal(SIGINT, signal_handler);
 #else
@@ -3586,30 +3607,65 @@ int main(int argc, char *argv[]) {
 		}
 	}
 
-	/* start mining threads */
-	for (i = 0; i < opt_n_threads; i++) {
-		thr = &thr_info[i];
 
-		thr->id = i;
-		thr->q = tq_new();
-		if (!thr->q)
-			return 1;
+	if (detect_algo) {
+     opt_algo = (enum algos) detect_algo_count;
+		 applog(LOG_INFO, "Set algo: %s", algo_names[opt_algo]);
+     
+     
+    /* start mining threads */
+	  for (i = 0; i < opt_n_threads; i++) {
+		  thr = &thr_info[i];
 
-		err = thread_create(thr, miner_thread);
-		if (err) {
-			applog(LOG_ERR, "thread %d create failed", i);
-			return 1;
-		}
-	}
+		  thr->id = i;
+		  thr->q = tq_new();
+		  if (!thr->q)
+			  return 1;
 
-	applog(LOG_INFO, "%d miner threads started, "
-		"using '%s' algorithm.",
-		opt_n_threads,
-		algo_names[opt_algo]);
+		  err = thread_create(thr, miner_thread);
+		
+		  if (err) {
+			  applog(LOG_ERR, "thread %d create failed", i);
+			  return 1;
+		  }
+	  }
 
-	/* main loop - simply wait for workio thread to exit */
-	pthread_join(thr_info[work_thr_id].pth, NULL);
+	  applog(LOG_INFO, "Detecting algorythm iteration %d with %d miner threads started, "
+		  "using '%s' algorithm.",
+		  detect_algo_count + 1,
+		  opt_n_threads,
+		  algo_names[opt_algo]);
 
+	  /* main loop - simply wait for workio thread to exit */
+	  pthread_join(thr_info[work_thr_id].pth, NULL);
+	} else {
+
+    
+	  /* start mining threads */
+	  for (i = 0; i < opt_n_threads; i++) {
+		  thr = &thr_info[i];
+
+		  thr->id = i;
+		  thr->q = tq_new();
+		  if (!thr->q)
+			  return 1;
+
+		  err = thread_create(thr, miner_thread);
+		
+		  if (err) {
+			  applog(LOG_ERR, "thread %d create failed", i);
+			  return 1;
+		  }
+	  }
+
+	  applog(LOG_INFO, "%d miner threads started, "
+		  "using '%s' algorithm.",
+		  opt_n_threads,
+		  algo_names[opt_algo]);
+
+	  /* main loop - simply wait for workio thread to exit */
+	  pthread_join(thr_info[work_thr_id].pth, NULL);
+  }
 	applog(LOG_WARNING, "workio thread dead, exiting.");
 
 	return 0;
